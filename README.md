@@ -86,6 +86,11 @@ python scripts/evaluate.py --weights runs/train/ppe_yolov8n/weights/best.pt
 python scripts/detect.py --source path/to/images --conf 0.4
 ```
 
+### 6. Launch the Streamlit Web UI
+```bash
+streamlit run app.py
+```
+
 ---
 
 ## 🧠 Model Details
