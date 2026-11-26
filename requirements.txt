@@ -1,20 +1,24 @@
-# Core
+# ── Core (training) ────────────────────────────────────────
 ultralytics>=8.2.0        # YOLOv8 training + inference
-torch>=2.1.0              # installed separately with CUDA support
+torch>=2.1.0              # install with CUDA separately if you have a GPU:
+                          #   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
 torchvision>=0.16.0
 
-# Data / visualisation
-opencv-python>=4.9.0
+# ── Data / visualisation ────────────────────────────────────
+opencv-python>=4.9.0      # webcam + video processing (use opencv-python-headless on Colab)
 Pillow>=10.0.0
 numpy>=1.26.0
 matplotlib>=3.8.0
 seaborn>=0.13.0
 
-# Notebook & utilities
+# ── Web demo app (app.py) ───────────────────────────────────
+gradio>=4.44.0            # UI: image upload + live webcam + video tabs
+
+# ── Notebook & utilities ────────────────────────────────────
 ipykernel>=6.29.0
 ipywidgets>=8.1.0
 tqdm>=4.66.0
 PyYAML>=6.0
 
-# Optional: experiment tracking
+# ── Optional: experiment tracking ──────────────────────────
 # wandb>=0.17.0
