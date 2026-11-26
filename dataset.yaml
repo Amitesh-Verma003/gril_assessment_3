@@ -1,0 +1,14 @@
+names:
+  0: person
+  1: hardhat
+  2: hardhat_wrong
+  3: no_hardhat
+  4: vest
+  5: vest_wrong
+  6: no_vest
+  7: gloves
+  8: no_gloves
+path: /content/dataset
+test: images/test
+train: images/train
+val: images/val

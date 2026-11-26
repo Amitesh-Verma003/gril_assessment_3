@@ -28,14 +28,21 @@ def clone_dataset(raw_dir: Path):
 
 
 def collect_pairs(raw_dir: Path):
-    """Return list of (image_path, label_path) pairs."""
+    """Return list of (image_path, label_path) pairs from nested train/val."""
     pairs = []
-    for img_path in sorted(raw_dir.rglob("*")):
-        if img_path.suffix.lower() not in IMG_EXTS:
-            continue
-        label_path = img_path.with_suffix(".txt")
-        if label_path.exists():
-            pairs.append((img_path, label_path))
+    raw_img_dir = raw_dir / "images"
+    raw_lbl_dir = raw_dir / "labels"
+    
+    for root, _, files in os.walk(raw_img_dir):
+        for file in files:
+            img_path = Path(root) / file
+            if img_path.suffix.lower() not in IMG_EXTS:
+                continue
+            # Relative path from raw_img_dir
+            rel_path = img_path.relative_to(raw_img_dir)
+            label_path = raw_lbl_dir / rel_path.with_suffix(".txt")
+            if label_path.exists():
+                pairs.append((img_path, label_path))
     return pairs
 
 
