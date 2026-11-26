@@ -424,13 +424,21 @@ def draw_annotations(
     return np.array(pil_img)
 
 
-def _belongs_to_person(gear_box: tuple[float, float, float, float], person_box: tuple[float, float, float, float]) -> bool:
-    """Return True if a PPE box overlaps significantly with an expanded person bounding box."""
+def _belongs_to_person(gear_box: tuple[float, float, float, float], person_box: tuple[float, float, float, float], gear_type: str = "generic") -> bool:
+    """Return True if a PPE box is spatially coherent with the corresponding anatomical region of a person."""
     px1, py1, px2, py2 = person_box
     pw = max(1.0, px2 - px1)
     ph = max(1.0, py2 - py1)
-    # Expand slightly above head and sides to capture hardhats resting on top of the person box
-    ex1, ey1, ex2, ey2 = px1 - 0.10 * pw, py1 - 0.15 * ph, px2 + 0.10 * pw, py2 + 0.05 * ph
+
+    if gear_type in {"hardhat", "hardhat_wrong", "no_hardhat"}:
+        # Head zone: top 35% of person, extending slightly above
+        ex1, ey1, ex2, ey2 = px1 - 0.15 * pw, py1 - 0.20 * ph, px2 + 0.15 * pw, py1 + 0.35 * ph
+    elif gear_type in {"vest", "vest_wrong", "no_vest"}:
+        # Torso zone: 20% to 75% down the person
+        ex1, ey1, ex2, ey2 = px1 - 0.10 * pw, py1 + 0.18 * ph, px2 + 0.10 * pw, py1 + 0.78 * ph
+    else:
+        # Generic gear overlap
+        ex1, ey1, ex2, ey2 = px1 - 0.10 * pw, py1 - 0.15 * ph, px2 + 0.10 * pw, py2 + 0.05 * ph
 
     gx1, gy1, gx2, gy2 = gear_box
     ix1, iy1 = max(ex1, gx1), max(ey1, gy1)
@@ -439,7 +447,7 @@ def _belongs_to_person(gear_box: tuple[float, float, float, float], person_box: 
         return False
     inter_area = (ix2 - ix1) * (iy2 - iy1)
     gear_area = max(1.0, (gx2 - gx1) * (gy2 - gy1))
-    return (inter_area / gear_area) >= 0.25
+    return (inter_area / gear_area) >= 0.30
 
 
 def _should_merge_persons(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
@@ -523,7 +531,7 @@ def audit_person_compliance(
         pw = max(1.0, px2 - px1)
         ph = max(1.0, py2 - py1)
 
-        if require_hardhat and not any(_belongs_to_person(g.xyxy, p.xyxy) for g in head_items):
+        if require_hardhat and not any(_belongs_to_person(g.xyxy, p.xyxy, "hardhat") for g in head_items):
             augmented.append(
                 Detection(
                     xyxy=(px1 + 0.20 * pw, py1, px2 - 0.20 * pw, py1 + 0.28 * ph),
@@ -534,7 +542,7 @@ def audit_person_compliance(
                     source="compliance_rule",
                 )
             )
-        if require_vest and not any(_belongs_to_person(g.xyxy, p.xyxy) for g in torso_items):
+        if require_vest and not any(_belongs_to_person(g.xyxy, p.xyxy, "vest") for g in torso_items):
             augmented.append(
                 Detection(
                     xyxy=(px1 + 0.12 * pw, py1 + 0.30 * ph, px2 - 0.12 * pw, min(py2, py1 + 0.78 * ph)),
