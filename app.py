@@ -67,7 +67,7 @@ VIOLATION_LABELS = {
 }
 
 # Default weights path — override via CLI or the UI
-DEFAULT_WEIGHTS = "models/weights/best.pt"
+DEFAULT_WEIGHTS = "weights/best.onnx"
 
 # ── Model loader (cached) ───────────────────────────────────────────────────
 _model_cache: dict = {}
@@ -78,7 +78,7 @@ def load_model(path: str) -> YOLO:
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"Weights not found: {path}\n"
-                "Copy best.pt from Colab to models/weights/best.pt"
+                "Copy best.onnx to weights/best.onnx  (already present ✅)"
             )
         print(f"[INFO] Loading model: {path}")
         _model_cache[path] = YOLO(path)
@@ -295,9 +295,9 @@ def build_settings_sidebar(tab_name: str):
     """Reusable settings block used in all three tabs."""
     with gr.Accordion("⚙️ Settings", open=False):
         weights = gr.Textbox(
-            label       = "Path to best.pt",
+            label       = "Path to best.onnx",
             value       = DEFAULT_WEIGHTS,
-            info        = "models/weights/best.pt  (after copying from Colab)",
+            info        = "weights/best.onnx  (already present ✅)",
         )
         conf = gr.Slider(0.1, 0.9, value=0.4, step=0.05,
                          label="Confidence threshold")
@@ -317,7 +317,7 @@ with gr.Blocks(title="PPE Violation Detector", theme=gr.themes.Soft()) as demo:
     |----------|----------|----------|
     | Upload an image | Live webcam feed | Upload a video file |
 
-    > Copy `best.pt` from Colab to `models/weights/best.pt` before running.
+    > Copy `best.onnx` from Colab to `weights/best.onnx` before running.
     """)
 
     # ── TAB 1 : IMAGE ───────────────────────────────────────────────────────
@@ -432,7 +432,7 @@ with gr.Blocks(title="PPE Violation Detector", theme=gr.themes.Soft()) as demo:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--weights", default=DEFAULT_WEIGHTS,
-                        help="Path to best.pt (default: models/weights/best.pt)")
+                        help="Path to weights (default: weights/best.onnx)")
     parser.add_argument("--port",    type=int, default=7860)
     parser.add_argument("--share",   action="store_true",
                         help="Generate public gradio.live URL (for Colab / mentor demo)")
@@ -448,7 +448,7 @@ if __name__ == "__main__":
             print(f"[WARN] Could not pre-load model: {e}")
     else:
         print(f"[WARN] Weights not found at {args.weights}")
-        print("       Copy best.pt from Colab to models/weights/best.pt")
+        print("       Expected: weights/best.onnx")
 
     demo.launch(
         server_name = "0.0.0.0",
