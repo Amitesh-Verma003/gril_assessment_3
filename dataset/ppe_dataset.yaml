@@ -1,0 +1,24 @@
+# ============================================================
+# PPE Compliance Detection – YOLOv8 Dataset Config
+# Source: https://github.com/Simuletic/cctv-ppe-compliance-detection-dataset
+# ============================================================
+
+path: ../dataset          # root dir (relative to this file)
+train: images/train
+val:   images/val
+test:  images/test
+
+# Number of classes
+nc: 9
+
+# Class names  (index → label)
+names:
+  0: person
+  1: hardhat
+  2: hardhat_wrong     # loose / worn backwards / held in hand
+  3: no_hardhat
+  4: vest
+  5: vest_wrong        # worn open / tied around waist
+  6: no_vest
+  7: gloves
+  8: no_gloves
