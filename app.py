@@ -25,11 +25,15 @@ from utils.inference import (
     CLASS_NAMES,
     PROJECT_ROOT,
     Detection,
+    audit_person_compliance,
     classify_id,
+    decode_image_bytes,
+    discover_exported_plots,
     discover_sample_images,
     discover_weights,
     draw_annotations,
     generate_demo_detections,
+    is_onnxruntime_available,
     is_ultralytics_available,
     load_dataset_config,
     load_training_runs,
@@ -85,10 +89,10 @@ st.markdown(
 )
 
 
-@st.cache_resource(show_spinner="Loading YOLOv8 model weights...")
-def get_cached_model(weights_path: str):
-    """Cache the loaded YOLO model across Streamlit reruns."""
-    return load_yolo_model(weights_path)
+@st.cache_resource(show_spinner="Loading PPE detection model...")
+def get_cached_model(weights_path: str, device: str = "cpu"):
+    """Cache the loaded ONNX or YOLO model across Streamlit reruns."""
+    return load_yolo_model(weights_path, device=device)
 
 
 def image_to_png_bytes(image_rgb: np.ndarray) -> bytes:
@@ -125,16 +129,17 @@ def render_sidebar() -> dict:
     st.sidebar.title("⚙️ PPE Model Controls")
 
     ultra_ok = is_ultralytics_available()
+    onnx_ok = is_onnxruntime_available()
     cuda_ok = torch.cuda.is_available()
 
     col_env1, col_env2 = st.sidebar.columns(2)
-    col_env1.caption(f"PyTorch: `{torch.__version__.split('+')[0]}`")
+    col_env1.caption(f"ONNX: `{'Ready' if onnx_ok else 'Missing'}`")
     col_env2.caption(f"GPU: `{'CUDA' if cuda_ok else 'CPU only'}`")
 
-    if not ultra_ok:
+    if not onnx_ok and not ultra_ok:
         st.sidebar.warning(
-            "`ultralytics` is not installed in this environment. "
-            "Run `pip install ultralytics` for real YOLOv8 inference, or use **Demo Mode** below."
+            "Neither `onnxruntime` nor `ultralytics` is installed. "
+            "Install one of them or use **Demo Mode** below."
         )
 
     discovered = discover_weights()
@@ -143,36 +148,42 @@ def render_sidebar() -> dict:
     st.sidebar.subheader("1. Model Weights")
     source_mode = st.sidebar.radio(
         "Weights Source",
-        options=["Project Checkpoints", "Upload .pt File", "Custom Path / Hub ID"],
+        options=["Project Checkpoints", "Upload Model (.onnx / .pt)", "Custom Path / Hub ID"],
         index=0,
     )
 
     selected_weights: str | None = None
     if source_mode == "Project Checkpoints":
         if weight_options:
-            choice = st.sidebar.selectbox("Select `.pt` checkpoint", weight_options)
+            choice = st.sidebar.selectbox("Select checkpoint", weight_options)
             selected_weights = str(PROJECT_ROOT / choice)
         else:
-            st.sidebar.info("No `.pt` files found in `models/weights/` or `runs/train/`.")
-    elif source_mode == "Upload .pt File":
-        uploaded_pt = st.sidebar.file_uploader("Upload YOLOv8 `.pt` weights", type=["pt"])
-        if uploaded_pt is not None:
-            weights_dir = PROJECT_ROOT / "models" / "weights"
+            st.sidebar.info("No `.onnx` or `.pt` files found in `weights/`, `models/weights/`, or `runs/train/`.")
+    elif source_mode == "Upload Model (.onnx / .pt)":
+        uploaded_model = st.sidebar.file_uploader("Upload `.onnx` or `.pt` weights", type=["onnx", "pt"])
+        if uploaded_model is not None:
+            weights_dir = PROJECT_ROOT / "weights"
             weights_dir.mkdir(parents=True, exist_ok=True)
-            dest_path = weights_dir / uploaded_pt.name
-            dest_path.write_bytes(uploaded_pt.getvalue())
+            dest_path = weights_dir / uploaded_model.name
+            dest_path.write_bytes(uploaded_model.getvalue())
             selected_weights = str(dest_path)
-            st.sidebar.success(f"Saved to `models/weights/{uploaded_pt.name}`")
+            st.sidebar.success(f"Saved to `weights/{uploaded_model.name}`")
     else:
+        default_custom = weight_options[0] if weight_options else "weights/best.onnx"
         custom_path = st.sidebar.text_input(
             "Weights path or Ultralytics model",
-            value="runs/train/ppe_yolov8n/weights/best.pt",
+            value=default_custom,
         )
         if custom_path.strip():
             candidate = Path(custom_path.strip())
             selected_weights = str(candidate if candidate.is_absolute() else PROJECT_ROOT / candidate)
 
-    default_demo = not ultra_ok or selected_weights is None
+    is_onnx_selected = bool(selected_weights and selected_weights.lower().endswith(".onnx"))
+    can_run_selected = (
+        (onnx_ok or ultra_ok) if is_onnx_selected else ultra_ok
+    )
+    default_demo = selected_weights is None or not can_run_selected
+
     demo_mode = st.sidebar.toggle(
         "Demo Mode (Simulated Detections)",
         value=default_demo,
@@ -180,13 +191,25 @@ def render_sidebar() -> dict:
     )
 
     st.sidebar.subheader("2. Inference Parameters")
-    conf = st.sidebar.slider("Confidence Threshold", 0.05, 0.95, 0.40, 0.05)
+    conf = st.sidebar.slider("Confidence Threshold", 0.05, 0.95, 0.25, 0.05)
     iou = st.sidebar.slider("IoU Threshold (NMS)", 0.10, 0.95, 0.45, 0.05)
     imgsz = st.sidebar.select_slider("Image Size (px)", options=[320, 480, 640, 960, 1280], value=640)
     device_options = ["auto", "cpu"] + (["0"] if cuda_ok else [])
     device = st.sidebar.selectbox("Device", options=device_options, index=0)
 
-    st.sidebar.subheader("3. Display & Class Filter")
+    st.sidebar.subheader("3. PPE Compliance Rules")
+    require_hardhat = st.sidebar.checkbox(
+        "Flag person missing Hardhat",
+        value=True,
+        help="When a person is detected without a visible hardhat box, flag no_hardhat.",
+    )
+    require_vest = st.sidebar.checkbox(
+        "Flag person missing Safety Vest",
+        value=True,
+        help="When a person is detected without a visible vest box, flag no_vest.",
+    )
+
+    st.sidebar.subheader("4. Display & Class Filter")
     filter_preset = st.sidebar.selectbox(
         "Class Filter",
         options=["All Classes", "Violations Only", "Compliant Only", "Custom Selection"],
@@ -223,11 +246,14 @@ def render_sidebar() -> dict:
         "iou": iou,
         "imgsz": imgsz,
         "device": device,
+        "require_hardhat": require_hardhat,
+        "require_vest": require_vest,
         "allowed_classes": allowed_classes,
         "show_labels": show_labels,
         "show_conf": show_conf,
         "line_width": line_width,
         "ultra_ok": ultra_ok,
+        "onnx_ok": onnx_ok,
     }
 
 
@@ -236,23 +262,28 @@ def make_detector(cfg: dict):
     if cfg["demo_mode"]:
         return lambda img: generate_demo_detections(img, conf_threshold=cfg["conf"]), None
 
-    if not cfg["ultra_ok"]:
-        return None, "Ultralytics is not installed. Install `ultralytics` or enable Demo Mode."
-
     if not cfg["weights"]:
-        return None, "No `.pt` weights selected. Upload weights, select a checkpoint, or enable Demo Mode."
+        return None, "No model checkpoint selected. Select or upload `.onnx` / `.pt` weights, or enable Demo Mode."
 
-    weights_path = Path(cfg["weights"])
-    if not weights_path.exists() and not cfg["weights"].endswith(".pt"):
-        return None, f"Weights file not found: `{cfg['weights']}`"
+    weights_str = cfg["weights"]
+    is_onnx = weights_str.lower().endswith(".onnx")
+
+    if is_onnx and not (cfg["onnx_ok"] or cfg["ultra_ok"]):
+        return None, "Install `onnxruntime` (or `ultralytics`) to run `.onnx` weights, or enable Demo Mode."
+    if not is_onnx and not cfg["ultra_ok"]:
+        return None, "Ultralytics is required for `.pt` weights. Select an `.onnx` checkpoint, install `ultralytics`, or enable Demo Mode."
+
+    weights_path = Path(weights_str)
+    if (is_onnx or weights_path.is_absolute() or "/" in weights_str or "\\" in weights_str) and not weights_path.exists():
+        return None, f"Weights file not found: `{weights_str}`"
 
     try:
-        model = get_cached_model(cfg["weights"])
+        model = get_cached_model(weights_str, device=cfg["device"])
     except Exception as exc:
-        return None, f"Failed to load model `{cfg['weights']}`: {exc}"
+        return None, f"Failed to load model `{weights_str}`: {exc}"
 
     def _detect(img_rgb: np.ndarray) -> list[Detection]:
-        return run_image_inference(
+        dets = run_image_inference(
             model,
             img_rgb,
             conf=cfg["conf"],
@@ -260,6 +291,13 @@ def make_detector(cfg: dict):
             imgsz=cfg["imgsz"],
             device=cfg["device"],
         )
+        if cfg["require_hardhat"] or cfg["require_vest"]:
+            dets = audit_person_compliance(
+                dets,
+                require_hardhat=cfg["require_hardhat"],
+                require_vest=cfg["require_vest"],
+            )
+        return dets
 
     return _detect, None
 
@@ -363,13 +401,16 @@ def render_image_tab(cfg: dict, detector_fn, err_msg: str | None):
     images_to_run: list[tuple[str, np.ndarray]] = []
     if input_mode == "Upload Image(s)":
         uploads = st.file_uploader(
-            "Upload one or more CCTV / worksite images",
-            type=["jpg", "jpeg", "png", "bmp", "webp"],
+            "Upload one or more CCTV / worksite images (all image formats supported)",
+            type=None,
             accept_multiple_files=True,
+            key="image_uploader_any",
         )
         for up in uploads or []:
-            pil = Image.open(up).convert("RGB")
-            images_to_run.append((up.name, np.array(pil)))
+            try:
+                images_to_run.append((up.name, decode_image_bytes(up.getvalue(), up.name)))
+            except ValueError as exc:
+                st.error(str(exc))
     elif input_mode == "Workspace Test / Output Images":
         rel_map = {str(p.relative_to(PROJECT_ROOT)): p for p in sample_paths}
         picked = st.multiselect(
@@ -378,8 +419,11 @@ def render_image_tab(cfg: dict, detector_fn, err_msg: str | None):
             default=list(rel_map.keys())[:1],
         )
         for rel in picked:
-            pil = Image.open(rel_map[rel]).convert("RGB")
-            images_to_run.append((Path(rel).name, np.array(pil)))
+            try:
+                raw = rel_map[rel].read_bytes()
+                images_to_run.append((Path(rel).name, decode_image_bytes(raw, rel)))
+            except ValueError as exc:
+                st.error(str(exc))
     else:
         images_to_run.append(("synthetic_worksite.png", create_synthetic_site_image()))
 
@@ -438,7 +482,11 @@ def render_video_tab(cfg: dict, detector_fn, err_msg: str | None):
     tmp_video_file = None
 
     if v_mode == "Upload Video File":
-        uploaded_vid = st.file_uploader("Upload CCTV / site video", type=["mp4", "avi", "mov", "mkv"])
+        uploaded_vid = st.file_uploader(
+            "Upload CCTV / site video (all video formats supported)",
+            type=None,
+            key="video_uploader_any",
+        )
         if uploaded_vid is not None:
             suffix = Path(uploaded_vid.name).suffix or ".mp4"
             tmp_video_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -550,7 +598,7 @@ def render_camera_tab(cfg: dict, detector_fn, err_msg: str | None):
         st.info("Allow browser camera access and click **Take Photo** to run instant PPE detection.")
         return
 
-    img_rgb = np.array(Image.open(snap).convert("RGB"))
+    img_rgb = decode_image_bytes(snap.getvalue(), "webcam_snapshot.png")
     detections = detector_fn(img_rgb)
     render_detection_result("webcam_snapshot.png", img_rgb, detections, cfg, side_by_side=True)
 
@@ -591,16 +639,27 @@ def render_dashboard_tab():
         )
 
     st.divider()
+    exported_plots = discover_exported_plots()
+    if exported_plots:
+        st.markdown("#### Exported Training & Evaluation Plots (`plots/`)")
+        exp_cols = st.columns(2)
+        for idx, plot_path in enumerate(exported_plots):
+            exp_cols[idx % 2].image(str(plot_path), caption=plot_path.name, width="stretch")
+        st.divider()
+
     st.markdown("#### Training Runs (`runs/train/`)")
     runs = load_training_runs()
     if not runs:
-        st.info(
-            "No local training runs found in `runs/train/`. Train or evaluate using:\n\n"
-            "```bash\n"
-            "python scripts/train.py --model yolov8n --epochs 50 --batch 16\n"
-            "python scripts/evaluate.py --weights runs/train/ppe_yolov8n/weights/best.pt\n"
-            "```"
-        )
+        if not exported_plots:
+            st.info(
+                "No local training runs found in `runs/train/`. Train or evaluate using:\n\n"
+                "```bash\n"
+                "python scripts/train.py --model yolov8n --epochs 50 --batch 16\n"
+                "python scripts/evaluate.py --weights runs/train/ppe_yolov8n/weights/best.pt\n"
+                "```"
+            )
+        else:
+            st.caption("Metrics above were exported from your training run into `plots/` and `weights/best.onnx`.")
         return
 
     run_map = {r["name"]: r for r in runs}
