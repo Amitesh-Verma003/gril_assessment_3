@@ -293,14 +293,14 @@ def process_video(video_path, weights, conf, iou, show_person,
 # ═══════════════════════════════════════════════════════════════════════════
 def build_settings_sidebar(tab_name: str):
     """Reusable settings block used in all three tabs."""
-    with gr.Accordion("⚙️ Settings", open=False):
+    with gr.Accordion("⚙️ Settings", open=True):
         weights = gr.Textbox(
-            label       = "Path to best.onnx",
+            label       = "Path to weights",
             value       = DEFAULT_WEIGHTS,
-            info        = "weights/best.onnx  (already present ✅)",
+            info        = "weights/best.onnx (already present ✅)",
         )
-        conf = gr.Slider(0.1, 0.9, value=0.4, step=0.05,
-                         label="Confidence threshold")
+        conf = gr.Slider(0.05, 0.9, value=0.20, step=0.05,
+                         label="Confidence threshold (Recommended: 0.20 for ONNX on CPU)")
         iou  = gr.Slider(0.1, 0.9, value=0.45, step=0.05,
                          label="IoU threshold (NMS)")
         person = gr.Checkbox(value=True, label="Draw 'person' box")
@@ -330,7 +330,7 @@ with gr.Blocks(title="PPE Violation Detector", theme=gr.themes.Soft()) as demo:
                     sources = ["upload", "clipboard"],
                 )
                 w1, c1, i1, p1 = build_settings_sidebar("img")
-                btn_img = gr.Button("🔍 Detect", variant="primary")
+                btn_img = gr.Button("🔍 Detect", variant="primary", size="lg")
 
             with gr.Column(scale=2):
                 img_status = gr.Label(label="Overall Status")
@@ -342,54 +342,35 @@ with gr.Blocks(title="PPE Violation Detector", theme=gr.themes.Soft()) as demo:
             inputs  = [img_input, w1, c1, i1, p1],
             outputs = [img_output, img_report, img_status],
         )
-        # auto-run on upload
-        img_input.change(
-            fn      = predict_image,
-            inputs  = [img_input, w1, c1, i1, p1],
-            outputs = [img_output, img_report, img_status],
-        )
 
     # ── TAB 2 : LIVE WEBCAM ─────────────────────────────────────────────────
-    with gr.Tab("📷  Live Webcam"):
+    with gr.Tab("📷  Webcam Snapshot / Feed"):
         gr.Markdown("""
-        > **How to use:** Click **▶ Start** to open your laptop camera.  
-        > The model runs on every frame and overlays bounding boxes in real-time.  
-        > FPS shown top-right — expect **3–8 FPS on CPU**, ~30 FPS with an NVIDIA GPU.
+        > **Tip for Laptop Camera:** Snap a photo or record a short clip from your webcam and run detection.
         """)
         with gr.Row():
             with gr.Column(scale=1):
                 webcam_in = gr.Image(
-                    label     = "📷 Webcam Input",
+                    label     = "📷 Webcam",
                     sources   = ["webcam"],
-                    streaming = True,       # ← key: sends frames continuously
                     type      = "numpy",
                 )
                 w2, c2, i2, p2 = build_settings_sidebar("cam")
+                btn_cam = gr.Button("🔍 Run Detection on Webcam Photo", variant="primary", size="lg")
 
-            with gr.Column(scale=1):
+            with gr.Column(scale=2):
+                cam_status = gr.Label(label="Overall Status")
                 webcam_out = gr.Image(
-                    label = "🔍 Live Detection Output",
+                    label = "🔍 Annotated Detection Output",
                     type  = "numpy",
                 )
+                cam_report = gr.Textbox(label="Detection Report", lines=8)
 
-        # stream: Gradio calls predict_webcam on every incoming frame
-        webcam_in.stream(
-            fn               = predict_webcam,
-            inputs           = [webcam_in, w2, c2, i2, p2],
-            outputs          = [webcam_out],
-            stream_every     = 0.1,     # seconds between inference calls (~10 FPS cap)
-            show_progress    = False,
+        btn_cam.click(
+            fn      = predict_image,
+            inputs  = [webcam_in, w2, c2, i2, p2],
+            outputs = [webcam_out, cam_report, cam_status],
         )
-
-        gr.Markdown("""
-        ### 💡 Tips for better webcam performance
-        | Tip | Detail |
-        |-----|--------|
-        | Use `yolov8n` | Fastest model — best for real-time on CPU |
-        | Raise conf threshold | 0.5–0.6 reduces false positives |
-        | Good lighting | Model was trained on well-lit CCTV images |
-        | Stay within 1–3 m | Smaller bounding boxes = harder detection |
-        """)
 
     # ── TAB 3 : VIDEO FILE ──────────────────────────────────────────────────
     with gr.Tab("🎬  Video File"):
